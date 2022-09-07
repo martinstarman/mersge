@@ -24,48 +24,61 @@ struct Line {
 }
 
 struct Context {
+  file_name: String,
   local_changes: Vec<Line>,
   incoming_changes: Vec<Line>,
   result: Vec<Line>,
   current_line: usize,
-  terminal: tui::Terminal<tui::backend::CrosstermBackend<std::io::Stdout>>,
 }
 
 fn main() -> Result<(), std::io::Error> {
-  let mut buffer = std::io::stdout();
+  let args: Vec<String> = std::env::args().collect();
+  if args.len() != 2 {
+    println!("Usage: mersge <filename>");
+    return Ok(());
+  }
 
   terminal::enable_raw_mode()?;
+  let mut buffer = std::io::stdout();
+
   crossterm::execute!(
     buffer,
     terminal::EnterAlternateScreen,
     event::EnableMouseCapture,
   )?;
 
+  let backend = tui::backend::CrosstermBackend::new(buffer);
+  let mut terminal = tui::Terminal::new(backend)?;
+
   let mut ctx = Context {
+    file_name: args[1].clone(),
     local_changes: vec![],
     incoming_changes: vec![],
     result: vec![],
     current_line: 0,
-    terminal: tui::Terminal::new(tui::backend::CrosstermBackend::new(buffer))?,
   };
 
-  let args: Vec<String> = std::env::args().collect();
-
-  if args.len() != 2 {
-    println!("Usage: \n\tmersge <filename>");
-    return Ok(());
-  }
-
-  parse(&args[1], &mut ctx);
+  parse_input_file(&mut ctx);
 
   loop {
-    render(&mut ctx);
-    handle_events(&mut ctx);
+    if !handle_events(&mut ctx) {
+      break;
+    }
+    render(&mut terminal, &mut ctx);
   }
+
+  terminal::disable_raw_mode()?;
+  crossterm::execute!(
+    terminal.backend_mut(),
+    terminal::LeaveAlternateScreen,
+    event::DisableMouseCapture
+  )?;
+
+  Ok(())
 }
 
-fn parse(file_name: &str, ctx: &mut Context) {
-  let file = std::fs::read_to_string(file_name).expect("Could not read a input file!");
+fn parse_input_file(ctx: &mut Context) {
+  let file = std::fs::read_to_string(&ctx.file_name).expect("Could not read a input file!");
   let mut column = Column::Middle;
 
   for line in file.lines() {
@@ -129,7 +142,10 @@ fn parse(file_name: &str, ctx: &mut Context) {
   }
 }
 
-fn render(ctx: &mut Context) {
+fn render(
+  terminal: &mut tui::Terminal<tui::backend::CrosstermBackend<std::io::Stdout>>,
+  ctx: &mut Context,
+) {
   let current_line_style = tui::style::Style::default().bg(tui::style::Color::Yellow);
   let add_style = tui::style::Style::default().fg(tui::style::Color::Green);
   let remove_style = tui::style::Style::default().fg(tui::style::Color::Red);
@@ -191,10 +207,16 @@ fn render(ctx: &mut Context) {
     }
   }
 
-  ctx
-    .terminal
+  terminal
     .draw(|frame| {
-      let chunks = Layout::default()
+      let tui::layout::Rect { height, .. } = frame.size();
+
+      let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(height - 3), Constraint::Min(3)].as_ref())
+        .split(frame.size());
+
+      let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(
           [
@@ -204,37 +226,78 @@ fn render(ctx: &mut Context) {
           ]
           .as_ref(),
         )
-        .split(frame.size());
+        .split(rows[0]);
 
-      let column_left = tui::widgets::Block::default()
+      let row_top = tui::widgets::Block::default();
+
+      let row_bottom = tui::widgets::Block::default().borders(tui::widgets::Borders::ALL);
+
+      let block_left = tui::widgets::Block::default()
         .title("Local changes (read only)")
         .borders(tui::widgets::Borders::ALL);
 
-      let column_middle = tui::widgets::Block::default()
+      let block_middle = tui::widgets::Block::default()
         .title("Result")
         .borders(tui::widgets::Borders::ALL);
 
-      let column_right = tui::widgets::Block::default()
+      let block_right = tui::widgets::Block::default()
         .title("Incoming changes (read only)")
         .borders(tui::widgets::Borders::ALL);
 
       let text_left = tui::widgets::Paragraph::new(local_changes)
-        .block(column_left)
+        .block(block_left)
         .wrap(tui::widgets::Wrap { trim: true });
 
       let text_middle = tui::widgets::Paragraph::new(result)
-        .block(column_middle)
+        .block(block_middle)
         .wrap(tui::widgets::Wrap { trim: true });
 
       let text_right = tui::widgets::Paragraph::new(incoming_changes)
-        .block(column_right)
+        .block(block_right)
         .wrap(tui::widgets::Wrap { trim: true });
 
-      frame.render_widget(text_left, chunks[0]);
-      frame.render_widget(text_middle, chunks[1]);
-      frame.render_widget(text_right, chunks[2]);
+      let controls = tui::widgets::Paragraph::new(vec![Spans::from(vec![
+        Span::from("[Up] Move up "),
+        Span::from("[Down] Move down "),
+        Span::from("[L] Accept local "),
+        Span::from("[R] Accept incoming "),
+        Span::from("[W] Write "),
+        Span::from("[Q] Quit "),
+      ])])
+      .block(row_bottom);
+
+      frame.render_widget(row_top, rows[0]);
+      frame.render_widget(controls, rows[1]);
+
+      frame.render_widget(text_left, columns[0]);
+      frame.render_widget(text_middle, columns[1]);
+      frame.render_widget(text_right, columns[2]);
     })
     .unwrap();
+}
+
+fn handle_events(ctx: &mut Context) -> bool {
+  let mut is_running = true;
+
+  match event::read().unwrap() {
+    event::Event::Key(event) => {
+      match event.code {
+        event::KeyCode::Char('q') => is_running = false,
+        event::KeyCode::Char('l') => process_change(Column::Left, ctx),
+        event::KeyCode::Char('r') => process_change(Column::Right, ctx),
+        event::KeyCode::Char('w') => write_file(ctx),
+        event::KeyCode::Down => move_down(ctx),
+        event::KeyCode::Up => move_up(ctx),
+        _ => (),
+      };
+    }
+
+    event::Event::Mouse(_) => {}
+
+    event::Event::Resize(_, _) => {}
+  };
+
+  return is_running;
 }
 
 fn process_change(column: Column, ctx: &mut Context) {
@@ -257,40 +320,50 @@ fn process_change(column: Column, ctx: &mut Context) {
   };
 }
 
-fn handle_events(ctx: &mut Context) {
-  match event::read().unwrap() {
-    event::Event::Key(event) => {
-      match event.code {
-        event::KeyCode::Char('q') => exit(ctx),
-        event::KeyCode::Char('l') => process_change(Column::Left, ctx),
-        event::KeyCode::Char('r') => process_change(Column::Right, ctx),
-        event::KeyCode::Down => {
-          if ctx.current_line < ctx.result.len() - 1 {
-            ctx.current_line += 1;
-          }
-        }
-        event::KeyCode::Up => {
-          if ctx.current_line > 0 {
-            ctx.current_line -= 1;
-          }
-        }
-        _ => (),
-      };
+fn write_file(ctx: &Context) {
+  let mut content = String::new();
+
+  for i in 0..ctx.result.len() {
+    if ctx.result[i].change != Change::Deletion {
+      content.push_str(ctx.result[i].value.clone().as_str());
+      content.push('\n');
     }
+  }
 
-    event::Event::Mouse(_) => {}
-
-    event::Event::Resize(_, _) => {}
-  };
+  std::fs::write(&ctx.file_name, content).unwrap();
 }
 
-fn exit(ctx: &mut Context) {
-  terminal::disable_raw_mode().unwrap();
-  crossterm::execute!(
-    ctx.terminal.backend_mut(),
-    terminal::LeaveAlternateScreen,
-    event::DisableMouseCapture
-  )
-  .unwrap();
-  std::process::exit(0);
+fn move_down(ctx: &mut Context) {
+  if ctx.current_line < ctx.result.len() - 1 {
+    ctx.current_line += 1;
+  }
+}
+
+fn move_up(ctx: &mut Context) {
+  if ctx.current_line > 0 {
+    ctx.current_line -= 1;
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  #[test]
+  fn parse_input_file() {
+    // TODO: move file reading outside this fn for easier testing
+  }
+
+  #[test]
+  fn process_change() {
+    // TODO: implement me
+  }
+
+  #[test]
+  fn move_down() {
+    // TODO: implement me
+  }
+
+  #[test]
+  fn move_up() {
+    // TODO: implement me
+  }
 }

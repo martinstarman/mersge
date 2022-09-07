@@ -5,16 +5,17 @@ Merge tool for command line
 ```mersge <file>```
 
 ## Usage
-- ```Arrow Up``` - move current line up
-- ```Arrow Down``` - move current line down
-- ```L``` - accept local line
-- ```R``` - accept incoming line
-
+- ```Arrow Up``` - move up
+- ```Arrow Down``` - move down
+- ```L``` - accept local
+- ```R``` - accept incoming
+- ```W``` - write file
+- ```Q``` - quit
+ 
 ## Build
 ```cargo build```
 
 ## TODO
-- saving merge result
-- manual edit
+- tests
 - scrolling columns
-- allow opening file
+- manual edit

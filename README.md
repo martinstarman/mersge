@@ -1,5 +1,7 @@
-# mersge
-Merge tool for command line
+# Mersge
+Simple 3-way merge editor for the terminal
+
+![Demo](./assets/demo.gif)
 
 ## Run
 ```mersge <file>```
@@ -15,7 +17,9 @@ Merge tool for command line
 ## Build
 ```cargo build```
 
-## TODO
-- tests
+## Test
+```cargo test```
+
+## Todo
 - scrolling columns
 - manual edit

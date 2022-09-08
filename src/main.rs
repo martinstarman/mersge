@@ -1,7 +1,9 @@
 use crossterm::{event, terminal};
 use tui::{
-  layout::{Constraint, Direction, Layout},
+  layout::{Constraint, Direction, Layout, Rect},
+  style::{Color, Style},
   text::{Span, Spans},
+  widgets::{Block, Borders, Paragraph},
 };
 
 #[derive(PartialEq)]
@@ -11,7 +13,7 @@ enum Column {
   Right,
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 enum Change {
   None,
   Addition,
@@ -146,70 +148,9 @@ fn render(
   terminal: &mut tui::Terminal<tui::backend::CrosstermBackend<std::io::Stdout>>,
   ctx: &mut Context,
 ) {
-  let current_line_style = tui::style::Style::default().bg(tui::style::Color::Yellow);
-  let add_style = tui::style::Style::default().fg(tui::style::Color::Green);
-  let remove_style = tui::style::Style::default().fg(tui::style::Color::Red);
-
-  let mut local_changes: Vec<Spans> = vec![];
-  let mut incoming_changes: Vec<Spans> = vec![];
-  let mut result: Vec<Spans> = vec![];
-
-  for i in 0..ctx.local_changes.len() {
-    let mut style = tui::style::Style::default();
-
-    if i == ctx.current_line {
-      style = style.patch(current_line_style);
-    }
-
-    style = match ctx.local_changes[i].change {
-      Change::None => style,
-      Change::Addition => style.patch(add_style),
-      Change::Deletion => style.patch(remove_style),
-    };
-
-    local_changes.push(Spans::from(Span::styled(
-      String::from(ctx.local_changes[i].value.clone()),
-      style,
-    )));
-  }
-
-  for i in 0..ctx.incoming_changes.len() {
-    let mut style = tui::style::Style::default();
-
-    if i == ctx.current_line {
-      style = style.patch(current_line_style);
-    }
-
-    style = match ctx.incoming_changes[i].change {
-      Change::None => style,
-      Change::Addition => style.patch(add_style),
-      Change::Deletion => style.patch(remove_style),
-    };
-
-    incoming_changes.push(Spans::from(Span::styled(
-      String::from(ctx.incoming_changes[i].value.clone()),
-      style,
-    )));
-  }
-
-  for i in 0..ctx.result.len() {
-    let mut style = tui::style::Style::default();
-
-    if i == ctx.current_line {
-      style = style.patch(current_line_style);
-    }
-
-    if ctx.result[i].change != Change::Deletion {
-      result.push(Spans::from(Span::styled(
-        String::from(ctx.result[i].value.clone()),
-        style,
-      )));
-    }
-  }
-
   terminal
     .draw(|frame| {
-      let tui::layout::Rect { height, .. } = frame.size();
+      let Rect { height, .. } = frame.size();
 
       let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -228,41 +169,104 @@ fn render(
         )
         .split(rows[0]);
 
-      let row_top = tui::widgets::Block::default();
+      let current_line_style = Style::default().bg(Color::Yellow);
+      let add_style = Style::default().fg(Color::Green);
+      let remove_style = Style::default().fg(Color::Red);
+      let control_style = Style::default().fg(Color::LightBlue);
 
-      let row_bottom = tui::widgets::Block::default().borders(tui::widgets::Borders::ALL);
+      let mut local_changes: Vec<Spans> = vec![];
+      let mut incoming_changes: Vec<Spans> = vec![];
+      let mut result: Vec<Spans> = vec![];
 
-      let block_left = tui::widgets::Block::default()
-        .title("Local changes (read only)")
-        .borders(tui::widgets::Borders::ALL);
+      for i in 0..ctx.local_changes.len() {
+        let mut style = Style::default();
 
-      let block_middle = tui::widgets::Block::default()
-        .title("Result")
-        .borders(tui::widgets::Borders::ALL);
+        if i == ctx.current_line {
+          style = style.patch(current_line_style);
+        }
 
-      let block_right = tui::widgets::Block::default()
-        .title("Incoming changes (read only)")
-        .borders(tui::widgets::Borders::ALL);
+        style = match ctx.local_changes[i].change {
+          Change::None => style,
+          Change::Addition => style.patch(add_style),
+          Change::Deletion => style.patch(remove_style),
+        };
 
-      let text_left = tui::widgets::Paragraph::new(local_changes)
-        .block(block_left)
-        .wrap(tui::widgets::Wrap { trim: true });
+        let span_text = pad(
+          ctx.local_changes[i].value.clone(),
+          columns[0].width as usize,
+        );
 
-      let text_middle = tui::widgets::Paragraph::new(result)
-        .block(block_middle)
-        .wrap(tui::widgets::Wrap { trim: true });
+        local_changes.push(Spans::from(Span::styled(String::from(span_text), style)));
+      }
 
-      let text_right = tui::widgets::Paragraph::new(incoming_changes)
-        .block(block_right)
-        .wrap(tui::widgets::Wrap { trim: true });
+      for i in 0..ctx.result.len() {
+        let mut style = Style::default();
 
-      let controls = tui::widgets::Paragraph::new(vec![Spans::from(vec![
-        Span::from("[Up] Move up "),
-        Span::from("[Down] Move down "),
-        Span::from("[L] Accept local "),
-        Span::from("[R] Accept incoming "),
-        Span::from("[W] Write "),
-        Span::from("[Q] Quit "),
+        if i == ctx.current_line {
+          style = style.patch(current_line_style);
+        }
+
+        let span_text = pad(ctx.result[i].value.clone(), columns[1].width as usize);
+
+        if ctx.result[i].change != Change::Deletion {
+          result.push(Spans::from(Span::styled(String::from(span_text), style)));
+        }
+      }
+
+      for i in 0..ctx.incoming_changes.len() {
+        let mut style = Style::default();
+
+        if i == ctx.current_line {
+          style = style.patch(current_line_style);
+        }
+
+        style = match ctx.incoming_changes[i].change {
+          Change::None => style,
+          Change::Addition => style.patch(add_style),
+          Change::Deletion => style.patch(remove_style),
+        };
+
+        let span_text = pad(
+          ctx.incoming_changes[i].value.clone(),
+          columns[2].width as usize,
+        );
+
+        incoming_changes.push(Spans::from(Span::styled(String::from(span_text), style)));
+      }
+
+      let row_top = Block::default();
+
+      let row_bottom = Block::default().borders(Borders::ALL);
+
+      let block_left = Block::default()
+        .title("Local changes")
+        .borders(Borders::ALL);
+
+      let block_middle = Block::default().title("Result").borders(Borders::ALL);
+
+      let block_right = Block::default()
+        .title("Incoming changes")
+        .borders(Borders::ALL);
+
+      let text_left = Paragraph::new(local_changes).block(block_left);
+
+      let text_middle = Paragraph::new(result).block(block_middle);
+
+      let text_right = Paragraph::new(incoming_changes).block(block_right);
+
+      let controls = Paragraph::new(vec![Spans::from(vec![
+        Span::styled("[Up] ", control_style),
+        Span::from("Move up "),
+        Span::styled("[Down] ", control_style),
+        Span::from("Move down "),
+        Span::styled("[L] ", control_style),
+        Span::from("Accept local "),
+        Span::styled("[R] ", control_style),
+        Span::from("Accept incoming "),
+        Span::styled("[W] ", control_style),
+        Span::from("Write "),
+        Span::styled("[Q] ", control_style),
+        Span::from("Quit "),
       ])])
       .block(row_bottom);
 
@@ -345,25 +349,133 @@ fn move_up(ctx: &mut Context) {
   }
 }
 
+fn pad(mut string: String, len: usize) -> String {
+  loop {
+    if string.len() >= len {
+      break;
+    }
+    string.push(' ');
+  }
+
+  string
+}
+
 #[cfg(test)]
 mod tests {
   #[test]
   fn parse_input_file() {
+    // TODO: implement me
     // TODO: move file reading outside this fn for easier testing
   }
 
   #[test]
   fn process_change() {
-    // TODO: implement me
+    let mut ctx = crate::Context {
+      file_name: String::new(),
+      local_changes: vec![
+        crate::Line {
+          value: String::from("L1"),
+          change: crate::Change::Addition,
+        },
+        crate::Line {
+          value: String::from("L2"),
+          change: crate::Change::Addition,
+        },
+      ],
+      incoming_changes: vec![
+        crate::Line {
+          value: String::from("R1"),
+          change: crate::Change::Deletion,
+        },
+        crate::Line {
+          value: String::from("R2"),
+          change: crate::Change::Addition,
+        },
+      ],
+      result: vec![
+        crate::Line {
+          value: String::new(),
+          change: crate::Change::None,
+        },
+        crate::Line {
+          value: String::new(),
+          change: crate::Change::None,
+        },
+      ],
+      current_line: 0,
+    };
+
+    crate::process_change(crate::Column::Right, &mut ctx);
+    assert_eq!(ctx.result[0].value, "");
+    assert_eq!(ctx.result[0].change, crate::Change::Deletion);
+
+    ctx.current_line = 1;
+
+    crate::process_change(crate::Column::Left, &mut ctx);
+    assert_eq!(ctx.result[1].value, "L2");
+    assert_eq!(ctx.result[1].change, crate::Change::Addition);
   }
 
   #[test]
   fn move_down() {
-    // TODO: implement me
+    let mut ctx = crate::Context {
+      file_name: String::new(),
+      local_changes: vec![],
+      incoming_changes: vec![],
+      result: vec![
+        crate::Line {
+          value: String::new(),
+          change: crate::Change::None,
+        },
+        crate::Line {
+          value: String::new(),
+          change: crate::Change::None,
+        },
+      ],
+      current_line: 0,
+    };
+
+    crate::move_down(&mut ctx);
+    assert_eq!(ctx.current_line, 1);
+
+    crate::move_down(&mut ctx);
+    assert_eq!(ctx.current_line, 1);
   }
 
   #[test]
   fn move_up() {
-    // TODO: implement me
+    let mut ctx = crate::Context {
+      file_name: String::new(),
+      local_changes: vec![],
+      incoming_changes: vec![],
+      result: vec![
+        crate::Line {
+          value: String::new(),
+          change: crate::Change::None,
+        },
+        crate::Line {
+          value: String::new(),
+          change: crate::Change::None,
+        },
+      ],
+      current_line: 1,
+    };
+
+    crate::move_up(&mut ctx);
+    assert_eq!(ctx.current_line, 0);
+
+    crate::move_up(&mut ctx);
+    assert_eq!(ctx.current_line, 0);
+  }
+
+  #[test]
+  fn pad() {
+    let mut s1 = String::from("ABC");
+
+    s1 = crate::pad(s1, 5);
+    assert_eq!(s1.len(), 5);
+
+    s1 = crate::pad(s1, 3);
+    assert_eq!(s1.len(), 5);
   }
 }

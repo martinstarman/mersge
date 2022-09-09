@@ -31,6 +31,8 @@ struct Context {
   incoming_changes: Vec<Line>,
   result: Vec<Line>,
   current_line: usize,
+  line_offset: usize,
+  column_height: usize,
 }
 
 fn main() -> Result<(), std::io::Error> {
@@ -58,9 +60,12 @@ fn main() -> Result<(), std::io::Error> {
     incoming_changes: vec![],
     result: vec![],
     current_line: 0,
+    line_offset: 0,
+    column_height: 0,
   };
 
-  parse_input_file(&mut ctx);
+  let file = std::fs::read_to_string(&ctx.file_name).expect("Could not read a input file!");
+  parse_input_file(file, &mut ctx);
 
   loop {
     if !handle_events(&mut ctx) {
@@ -79,8 +84,7 @@ fn main() -> Result<(), std::io::Error> {
   Ok(())
 }
 
-fn parse_input_file(ctx: &mut Context) {
-  let file = std::fs::read_to_string(&ctx.file_name).expect("Could not read a input file!");
+fn parse_input_file(file: String, ctx: &mut Context) {
   let mut column = Column::Middle;
 
   for line in file.lines() {
@@ -169,6 +173,13 @@ fn render(
         )
         .split(rows[0]);
 
+      let column_height = columns[0].height as usize - 2; // remove top and bottom border
+      ctx.column_height = if ctx.result.len() < column_height {
+        ctx.result.len()
+      } else {
+        column_height
+      };
+
       let current_line_style = Style::default().bg(Color::Yellow);
       let add_style = Style::default().fg(Color::Green);
       let remove_style = Style::default().fg(Color::Red);
@@ -178,64 +189,87 @@ fn render(
       let mut incoming_changes: Vec<Spans> = vec![];
       let mut result: Vec<Spans> = vec![];
 
-      for i in 0..ctx.local_changes.len() {
+      let line_from = ctx.line_offset;
+      let line_to = ctx.line_offset + ctx.column_height;
+
+      for i in line_from..line_to {
         let mut style = Style::default();
 
         if i == ctx.current_line {
           style = style.patch(current_line_style);
         }
 
-        style = match ctx.local_changes[i].change {
+        // left column
+        let span_style = match ctx.local_changes[i].change {
           Change::None => style,
           Change::Addition => style.patch(add_style),
           Change::Deletion => style.patch(remove_style),
         };
 
-        let span_text = pad(
+        let span_content = pad(
           ctx.local_changes[i].value.clone(),
           columns[0].width as usize,
         );
 
-        local_changes.push(Spans::from(Span::styled(String::from(span_text), style)));
-      }
+        local_changes.push(Spans::from(Span::styled(
+          String::from(span_content),
+          span_style,
+        )));
 
-      for i in 0..ctx.result.len() {
-        let mut style = Style::default();
-
-        if i == ctx.current_line {
-          style = style.patch(current_line_style);
-        }
-
-        let span_text = pad(ctx.result[i].value.clone(), columns[1].width as usize);
-
-        if ctx.result[i].change != Change::Deletion {
-          result.push(Spans::from(Span::styled(String::from(span_text), style)));
-        }
-      }
-
-      for i in 0..ctx.incoming_changes.len() {
-        let mut style = Style::default();
-
-        if i == ctx.current_line {
-          style = style.patch(current_line_style);
-        }
-
-        style = match ctx.incoming_changes[i].change {
+        // right column
+        let span_style = match ctx.incoming_changes[i].change {
           Change::None => style,
           Change::Addition => style.patch(add_style),
           Change::Deletion => style.patch(remove_style),
         };
 
-        let span_text = pad(
+        let span_content = pad(
           ctx.incoming_changes[i].value.clone(),
           columns[2].width as usize,
         );
 
-        incoming_changes.push(Spans::from(Span::styled(String::from(span_text), style)));
+        incoming_changes.push(Spans::from(Span::styled(
+          String::from(span_content),
+          span_style,
+        )));
+      }
+
+      // middle column can have deleted lines, so handle them differently
+      let mut i = line_from;
+      let mut line_to = line_to;
+
+      loop {
+        let mut style = Style::default();
+
+        if i == ctx.current_line {
+          style = style.patch(current_line_style);
+        }
+
+        let span_style = match ctx.result[i].change {
+          Change::None => style,
+          Change::Addition => style.patch(add_style),
+          Change::Deletion => style.patch(remove_style),
+        };
+
+        let span_content = pad(ctx.result[i].value.clone(), columns[1].width as usize);
+
+        if ctx.result[i].change == Change::Deletion {
+          line_to += 1;
+        } else {
+          result.push(Spans::from(Span::styled(
+            String::from(span_content),
+            span_style,
+          )));
+        }
+
+        i += 1;
+
+        if i >= ctx.result.len() || i == line_to {
+          break;
+        }
       }
 
       let row_top = Block::default();
-
       let row_bottom = Block::default().borders(Borders::ALL);
 
       let block_left = Block::default()
@@ -243,15 +277,12 @@ fn render(
         .borders(Borders::ALL);
 
       let block_middle = Block::default().title("Result").borders(Borders::ALL);
-
       let block_right = Block::default()
         .title("Incoming changes")
         .borders(Borders::ALL);
 
       let text_left = Paragraph::new(local_changes).block(block_left);
-
       let text_middle = Paragraph::new(result).block(block_middle);
-
       let text_right = Paragraph::new(incoming_changes).block(block_right);
 
       let controls = Paragraph::new(vec![Spans::from(vec![
@@ -341,11 +372,19 @@ fn move_down(ctx: &mut Context) {
   if ctx.current_line < ctx.result.len() - 1 {
     ctx.current_line += 1;
   }
+
+  if ctx.current_line > ctx.line_offset + ctx.column_height - 1 {
+    ctx.line_offset += 1;
+  }
 }
 
 fn move_up(ctx: &mut Context) {
   if ctx.current_line > 0 {
     ctx.current_line -= 1;
+  }
+
+  if ctx.current_line < ctx.line_offset {
+    ctx.line_offset -= 1;
   }
 }
 
@@ -364,8 +403,55 @@ fn pad(mut string: String, len: usize) -> String {
 mod tests {
   #[test]
   fn parse_input_file() {
-    // TODO: implement me
-    // TODO: move file reading outside this fn for easier testing
+    let mut ctx = crate::Context {
+      file_name: String::new(),
+      local_changes: vec![],
+      incoming_changes: vec![],
+      result: vec![],
+      current_line: 0,
+      line_offset: 0,
+      column_height: 0,
+    };
+
+    let file = String::from("before\n<<<<<<<\nabcd\nefgh\n=======\nijkl\n>>>>>>>\nafter");
+
+    crate::parse_input_file(file, &mut ctx);
+
+    assert_eq!(ctx.local_changes.len(), 5);
+    assert_eq!(ctx.local_changes[0].value, "before");
+    assert_eq!(ctx.local_changes[0].change, crate::Change::None);
+    assert_eq!(ctx.local_changes[1].value, "abcd");
+    assert_eq!(ctx.local_changes[1].change, crate::Change::Addition);
+    assert_eq!(ctx.local_changes[2].value, "efgh");
+    assert_eq!(ctx.local_changes[2].change, crate::Change::Addition);
+    assert_eq!(ctx.local_changes[3].value, "-");
+    assert_eq!(ctx.local_changes[3].change, crate::Change::Deletion);
+    assert_eq!(ctx.local_changes[4].value, "after");
+    assert_eq!(ctx.local_changes[4].change, crate::Change::None);
+
+    assert_eq!(ctx.result.len(), 5);
+    assert_eq!(ctx.result[0].value, "before");
+    assert_eq!(ctx.result[0].change, crate::Change::None);
+    assert_eq!(ctx.result[1].value, "#");
+    assert_eq!(ctx.result[1].change, crate::Change::None);
+    assert_eq!(ctx.result[2].value, "#");
+    assert_eq!(ctx.result[2].change, crate::Change::None);
+    assert_eq!(ctx.result[3].value, "#");
+    assert_eq!(ctx.result[3].change, crate::Change::None);
+    assert_eq!(ctx.result[4].value, "after");
+    assert_eq!(ctx.result[4].change, crate::Change::None);
+
+    assert_eq!(ctx.incoming_changes.len(), 5);
+    assert_eq!(ctx.incoming_changes[0].value, "before");
+    assert_eq!(ctx.incoming_changes[0].change, crate::Change::None);
+    assert_eq!(ctx.incoming_changes[1].value, "-");
+    assert_eq!(ctx.incoming_changes[1].change, crate::Change::Deletion);
+    assert_eq!(ctx.incoming_changes[2].value, "-");
+    assert_eq!(ctx.incoming_changes[2].change, crate::Change::Deletion);
+    assert_eq!(ctx.incoming_changes[3].value, "ijkl");
+    assert_eq!(ctx.incoming_changes[3].change, crate::Change::Addition);
+    assert_eq!(ctx.incoming_changes[4].value, "after");
+    assert_eq!(ctx.incoming_changes[4].change, crate::Change::None);
   }
 
   #[test]
@@ -403,6 +489,8 @@ mod tests {
         },
       ],
       current_line: 0,
+      line_offset: 0,
+      column_height: 0,
     };
 
     crate::process_change(crate::Column::Right, &mut ctx);
@@ -433,6 +521,8 @@ mod tests {
         },
       ],
       current_line: 0,
+      line_offset: 0,
+      column_height: 10,
     };
 
     crate::move_down(&mut ctx);
@@ -459,6 +549,8 @@ mod tests {
         },
       ],
       current_line: 1,
+      line_offset: 0,
+      column_height: 0,
     };
 
     crate::move_up(&mut ctx);
@@ -466,6 +558,57 @@ mod tests {
 
     crate::move_up(&mut ctx);
     assert_eq!(ctx.current_line, 0);
+  }
+
+  #[test]
+  fn scroll() {
+    let mut ctx = crate::Context {
+      file_name: String::new(),
+      local_changes: vec![],
+      incoming_changes: vec![],
+      result: vec![
+        crate::Line {
+          value: String::new(),
+          change: crate::Change::None,
+        },
+        crate::Line {
+          value: String::new(),
+          change: crate::Change::None,
+        },
+        crate::Line {
+          value: String::new(),
+          change: crate::Change::None,
+        },
+      ],
+      current_line: 0,
+      line_offset: 0,
+      column_height: 2,
+    };
+
+    crate::move_down(&mut ctx);
+
+    assert_eq!(ctx.current_line, 1);
+    assert_eq!(ctx.line_offset, 0);
+
+    crate::move_down(&mut ctx);
+
+    assert_eq!(ctx.current_line, 2);
+    assert_eq!(ctx.line_offset, 1);
+
+    crate::move_down(&mut ctx);
+
+    assert_eq!(ctx.current_line, 2);
+    assert_eq!(ctx.line_offset, 1);
+
+    crate::move_up(&mut ctx);
+
+    assert_eq!(ctx.current_line, 1);
+    assert_eq!(ctx.line_offset, 1);
+
+    crate::move_up(&mut ctx);
+
+    assert_eq!(ctx.current_line, 0);
+    assert_eq!(ctx.line_offset, 0);
   }
 
   #[test]

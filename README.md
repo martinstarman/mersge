@@ -21,5 +21,5 @@ Simple 3-way merge editor for the terminal
 ```cargo test```
 
 ## Todo
-- scrolling columns
+- vertical scrolling
 - manual edit
